@@ -4,65 +4,45 @@ using System.Collections.Generic;
 
 public class TextureApplier : MonoBehaviour
 {
-    [SerializeField] private List<Renderer> cubeRenderers;
-    private Dictionary<string, Renderer> idToRenderer;
-    private Dictionary<string, Texture2D> clientTextures = new Dictionary<string, Texture2D>();
-    private HashSet<string> knownClientIds = new HashSet<string>();
+    // Кеш текстур по конкретному Renderer
+    private readonly Dictionary<Renderer, Texture2D> texByRenderer = new Dictionary<Renderer, Texture2D>();
 
-    void OnEnable()
+    private void OnEnable()
     {
-        NetworkReceiver.OnImageReceived += HandleImage;
+        FishLogic.OnImageForRenderer += HandleImageForRenderer;
     }
 
-    void OnDisable()
+    private void OnDisable()
     {
-        NetworkReceiver.OnImageReceived -= HandleImage;
+        FishLogic.OnImageForRenderer -= HandleImageForRenderer;
     }
 
-    void Start()
+    private void HandleImageForRenderer(Renderer rend, byte[] imageBytes)
     {
-        idToRenderer = new Dictionary<string, Renderer>()
-        {
-            { "client1", cubeRenderers[0] },
-            { "client2", cubeRenderers[1] },
-            { "client3", cubeRenderers[2] },
-            { "client4", cubeRenderers[3] },
-            { "client5", cubeRenderers[4] }
-        };
+        if (rend == null || imageBytes == null || imageBytes.Length == 0) return;
 
-        foreach (var clientId in idToRenderer.Keys)
+        if (!texByRenderer.TryGetValue(rend, out var tex) || tex == null)
         {
-            clientTextures[clientId] = new Texture2D(2048, 1024, TextureFormat.RGBA32, false);
-            knownClientIds.Add(clientId);
-        }
-    }
-
-    private void HandleImage(string clientId, byte[] imageBytes)
-    {
-        if (!knownClientIds.Contains(clientId))
-        {
-            Debug.LogWarning($"🚫 [SERVER] Невідомий ID: {clientId}, ігноруємо");
-            return;
+            tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+            texByRenderer[rend] = tex;
         }
 
-        Texture2D tex = clientTextures[clientId];
-        bool loaded = tex.LoadImage(imageBytes, true);
-        if (loaded)
+        if (tex.LoadImage(imageBytes, true))
         {
-            idToRenderer[clientId].sharedMaterial.mainTexture = tex;
-            Debug.Log($"✅ [SERVER] Текстура оновлена для {clientId}");
-        }
-        else
-        {
-            Debug.LogWarning("⚠️ [SERVER] Помилка при завантаженні зображення");
+            var mat = rend.sharedMaterial;
+            if (mat != null)
+            {
+                if (mat.HasProperty("_BaseMap"))      mat.SetTexture("_BaseMap", tex);
+                else if (mat.HasProperty("_MainTex")) mat.SetTexture("_MainTex", tex);
+                else                                   mat.mainTexture = tex;
+            }
         }
     }
 
-    void OnApplicationQuit()
+    private void OnApplicationQuit()
     {
-        foreach (var tex in clientTextures.Values)
-        {
-            UnityEngine.Object.Destroy(tex);
-        }
+        foreach (var kv in texByRenderer)
+            if (kv.Value != null) Destroy(kv.Value);
+        texByRenderer.Clear();
     }
 }
