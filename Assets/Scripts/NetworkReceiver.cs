@@ -1,20 +1,19 @@
 using UnityEngine;
+using System;
 using System.Net;
 using System.Net.Sockets;
-using System;
-using System.Collections.Generic;
 using System.Text;
+using System.Threading;
+using System.Collections.Generic;
 
-public class TextureReceiverServer : MonoBehaviour
+public class NetworkReceiver : MonoBehaviour
 {
     public int port = 5005;
     private TcpListener listener;
     private Queue<Action> mainThreadActions = new Queue<Action>();
 
-    [SerializeField] private List<Renderer> cubeRenderers;
-    private Dictionary<string, Renderer> idToRenderer;
-    private Dictionary<string, Texture2D> clientTextures = new Dictionary<string, Texture2D>();
-    private HashSet<string> knownClientIds = new HashSet<string>();
+    // Єдина подія для передачі даних далі
+    public static event Action<string, byte[]> OnImageReceived;
 
     void Start()
     {
@@ -22,21 +21,6 @@ public class TextureReceiverServer : MonoBehaviour
         listener.Start();
         Debug.Log($"🟢 [SERVER] Слухаємо порт {port}...");
         listener.BeginAcceptTcpClient(OnClientConnected, null);
-
-        idToRenderer = new Dictionary<string, Renderer>()
-        {
-            { "client1", cubeRenderers[0] },
-            { "client2", cubeRenderers[1] },
-            { "client3", cubeRenderers[2] },
-            { "client4", cubeRenderers[3] },
-            { "client5", cubeRenderers[4] }
-        };
-
-        foreach (var clientId in idToRenderer.Keys)
-        {
-            clientTextures[clientId] = new Texture2D(2048, 1024, TextureFormat.RGBA32, false);
-            knownClientIds.Add(clientId);
-        }
     }
 
     void OnClientConnected(IAsyncResult ar)
@@ -58,12 +42,6 @@ public class TextureReceiverServer : MonoBehaviour
                 stream.Read(idBytes, 0, idLength);
                 string clientId = Encoding.UTF8.GetString(idBytes);
 
-                if (!knownClientIds.Contains(clientId))
-                {
-                    Debug.LogWarning($"🚫 [SERVER] Невідомий ID: {clientId}, ігноруємо");
-                    return;
-                }
-
                 byte[] imageLengthBytes = new byte[4];
                 stream.Read(imageLengthBytes, 0, 4);
                 int imageLength = BitConverter.ToInt32(imageLengthBytes, 0);
@@ -77,17 +55,7 @@ public class TextureReceiverServer : MonoBehaviour
                 {
                     mainThreadActions.Enqueue(() =>
                     {
-                        Texture2D tex = clientTextures[clientId];
-                        bool loaded = tex.LoadImage(imageBytes, true);
-                        if (loaded)
-                        {
-                            idToRenderer[clientId].sharedMaterial.mainTexture = tex;
-                            Debug.Log($"✅ [SERVER] Текстура оновлена для {clientId}");
-                        }
-                        else
-                        {
-                            Debug.LogWarning("⚠️ [SERVER] Помилка при завантаженні зображення");
-                        }
+                        OnImageReceived?.Invoke(clientId, imageBytes);
                     });
                 }
             }
@@ -119,11 +87,6 @@ public class TextureReceiverServer : MonoBehaviour
             Debug.Log("[SERVER] Сервер зупинено");
             listener.Stop();
             listener = null;
-        }
-
-        foreach (var tex in clientTextures.Values)
-        {
-            UnityEngine.Object.Destroy(tex);
         }
     }
 }
